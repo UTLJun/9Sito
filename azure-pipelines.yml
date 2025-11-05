@@ -16,13 +16,13 @@ steps:
 - checkout: self
 
 - script: |
-    echo "🔄 Commit detectado: $(Build.SourceVersionMessage)"
+    echo "Commit detectado: $(Build.SourceVersionMessage)"
     echo "Autor: $(Build.RequestedFor)"
     echo "Repositorio: $(Build.Repository.Uri)"
   displayName: "Registrar información del commit"
 
 - task: Bash@3
-  displayName: "🧠 Crear Task en Azure Boards (automático)"
+  displayName: "Crear Task en Azure Boards (automático)"
   inputs:
     targetType: 'inline'
     script: |
@@ -35,15 +35,15 @@ steps:
       AUTHOR="$(Build.RequestedFor)"
       URL="$(Build.Repository.Uri)/commit/$(Build.SourceVersion)"
 
-      echo "🔍 Buscando si el mensaje del commit menciona un PBI..."
+      echo "Buscando si el mensaje del commit menciona un PBI..."
       echo "Mensaje del commit: $COMMIT_MSG"
 
       # Buscar referencia a #PBIxx en el mensaje del commit
       if [[ "$COMMIT_MSG" =~ \#PBI([0-9]+) ]]; then
         PARENT_ID=${BASH_REMATCH[1]}
-        echo "✅ Se encontró PBI #$PARENT_ID en el commit."
+        echo "Se encontró PBI #$PARENT_ID en el commit."
       else
-        echo "⚠️ No se mencionó ningún PBI en el commit. Creando uno nuevo..."
+        echo "No se mencionó ningún PBI en el commit. Creando uno nuevo..."
 
         # Crear nuevo Product Backlog Item vacío
         PBI_DATA=$(cat <<EOF
@@ -61,10 +61,10 @@ steps:
           "$ORG/$PROJECT/_apis/wit/workitems/$?type=Product%20Backlog%20Item&api-version=7.0")
 
         PARENT_ID=$(echo $RESPONSE | jq -r '.id')
-        echo "🆕 Se creó el nuevo PBI con ID: $PARENT_ID"
+        echo "Se creó el nuevo PBI con ID: $PARENT_ID"
       fi
 
-      echo "🧩 Creando Task hija del PBI #$PARENT_ID..."
+      echo "Creando Task hija del PBI #$PARENT_ID..."
 
       # Crear la nueva Task y vincularla al PBI
       TASK_DATA=$(cat <<EOF
@@ -82,7 +82,7 @@ steps:
         -d "$TASK_DATA" \
         "$ORG/$PROJECT/_apis/wit/workitems/$?type=Task&api-version=7.0"
 
-      echo "✅ Task creada correctamente y vinculada al PBI #$PARENT_ID"
+      echo "Task creada correctamente y vinculada al PBI #$PARENT_ID"
   env:
     SYSTEM_ACCESSTOKEN: $(System.AccessToken)
 
