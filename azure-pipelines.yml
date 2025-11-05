@@ -1,0 +1,88 @@
+# Starter pipeline
+# Start with a minimal pipeline that you can customize to build and deploy your code.
+# Add steps that build, run tests, deploy, and more:
+# https://aka.ms/yaml
+
+trigger:
+  branches:
+    include:
+      - main
+      - develop
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+steps:
+- checkout: self
+
+- script: |
+    echo "🔄 Commit detectado: $(Build.SourceVersionMessage)"
+    echo "Autor: $(Build.RequestedFor)"
+    echo "Repositorio: $(Build.Repository.Uri)"
+  displayName: "Registrar información del commit"
+
+- task: Bash@3
+  displayName: "🧠 Crear Task en Azure Boards (automático)"
+  inputs:
+    targetType: 'inline'
+    script: |
+      # Configuración inicial
+      ORG="https://dev.azure.com/9Codigo"
+      PROJECT="9Sito"
+      TOKEN="$(System.AccessToken)"
+
+      COMMIT_MSG="$(Build.SourceVersionMessage)"
+      AUTHOR="$(Build.RequestedFor)"
+      URL="$(Build.Repository.Uri)/commit/$(Build.SourceVersion)"
+
+      echo "🔍 Buscando si el mensaje del commit menciona un PBI..."
+      echo "Mensaje del commit: $COMMIT_MSG"
+
+      # Buscar referencia a #PBIxx en el mensaje del commit
+      if [[ "$COMMIT_MSG" =~ \#PBI([0-9]+) ]]; then
+        PARENT_ID=${BASH_REMATCH[1]}
+        echo "✅ Se encontró PBI #$PARENT_ID en el commit."
+      else
+        echo "⚠️ No se mencionó ningún PBI en el commit. Creando uno nuevo..."
+
+        # Crear nuevo Product Backlog Item vacío
+        PBI_DATA=$(cat <<EOF
+        [
+          { "op": "add", "path": "/fields/System.Title", "value": "Auto PBI generado por commit" },
+          { "op": "add", "path": "/fields/System.Description", "value": "Este Product Backlog Item fue creado automáticamente porque el commit no especificó ningún PBI asociado." }
+        ]
+        EOF
+        )
+
+        RESPONSE=$(curl -s -u :$TOKEN \
+          -X POST \
+          -H "Content-Type: application/json-patch+json" \
+          -d "$PBI_DATA" \
+          "$ORG/$PROJECT/_apis/wit/workitems/$?type=Product%20Backlog%20Item&api-version=7.0")
+
+        PARENT_ID=$(echo $RESPONSE | jq -r '.id')
+        echo "🆕 Se creó el nuevo PBI con ID: $PARENT_ID"
+      fi
+
+      echo "🧩 Creando Task hija del PBI #$PARENT_ID..."
+
+      # Crear la nueva Task y vincularla al PBI
+      TASK_DATA=$(cat <<EOF
+      [
+        { "op": "add", "path": "/fields/System.Title", "value": "Task: $COMMIT_MSG" },
+        { "op": "add", "path": "/fields/System.Description", "value": "Commit realizado por $AUTHOR. [Ver commit]($URL)" },
+        { "op": "add", "path": "/relations/-", "value": { "rel": "System.LinkTypes.Hierarchy-Reverse", "url": "$ORG/$PROJECT/_apis/wit/workItems/$PARENT_ID", "attributes": { "comment": "Task hija de PBI $PARENT_ID" } } }
+      ]
+      EOF
+      )
+
+      curl -s -u :$TOKEN \
+        -X POST \
+        -H "Content-Type: application/json-patch+json" \
+        -d "$TASK_DATA" \
+        "$ORG/$PROJECT/_apis/wit/workitems/$?type=Task&api-version=7.0"
+
+      echo "✅ Task creada correctamente y vinculada al PBI #$PARENT_ID"
+  env:
+    SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+
