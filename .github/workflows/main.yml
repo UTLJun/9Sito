@@ -14,38 +14,62 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Install JQ (JSON Processor)
+        run: sudo apt-get install jq
+
       - name: Detect commit message
         id: detect
         run: |
           COMMIT_MSG=$(git log -1 --pretty=%B)
+          # 1. Capturar la fecha del commit para el mensaje de Discord
+          COMMIT_DATE=$(git log -1 --pretty=format:'%as')
           echo "commit_msg=$COMMIT_MSG" >> $GITHUB_OUTPUT
-          echo "Commit detectado: $COMMIT_MSG"
+          echo "commit_date=$COMMIT_DATE" >> $GITHUB_OUTPUT
+          echo "Commit detectado: $COMMIT_MSG (Fecha: $COMMIT_DATE)"
 
       # 🆕 Crear una tarea en Azure si el commit contiene "TODO"
       - name: Create task in Azure if commit contains 'TODO'
+        id: create_task # ID para capturar outputs
         if: contains(steps.detect.outputs.commit_msg, 'TODO')
         run: |
+          # 2. Corregido: La autenticación usa el formato básico de User:PAT (User vacío)
           AUTH=$(printf ":${{ secrets.AZURE_PAT }}" | base64 | tr -d '\n')
           TaskType=Task
-          curl -X POST \
+          
+          # Hacemos el POST y capturamos la respuesta JSON para extraer el ID y título
+          RESPONSE=$(curl -s -X POST \
             -H "Content-Type: application/json-patch+json" \
             -H "Authorization: Basic $AUTH" \
             -d "[
               {\"op\": \"add\", \"path\": \"/fields/System.Title\", \"value\": \"Tarea creada desde commit: ${{ steps.detect.outputs.commit_msg }}\"},
               {\"op\": \"add\", \"path\": \"/fields/System.State\", \"value\": \"To Do\"}
             ]" \
-              "https://dev.azure.com/${{ secrets.AZURE_ORG}}/${{ secrets.AZURE_PROJECT}}/_apis/wit/workitems/${TaskType}?api-version=7.0"
-
-
+            "https://dev.azure.com/${{ secrets.AZURE_ORG}}/${{ secrets.AZURE_PROJECT}}/_apis/wit/workitems/${TaskType}?api-version=7.0")
+            
+          # Extraemos y exportamos el ID y el Título
+          TASK_ID=$(echo "$RESPONSE" | jq -r '.id')
+          TASK_TITLE=$(echo "$RESPONSE" | jq -r '.fields."System.Title"')
+          
+          echo "task_id=$TASK_ID" >> $GITHUB_OUTPUT
+          echo "task_title=$TASK_TITLE" >> $GITHUB_OUTPUT
+          echo "Tarea Azure ID: $TASK_ID creada."
+          
       - name: Send Discord message on task creation
-        if: contains(steps.detect.outputs.commit_msg, 'TODO')
+        if: contains(steps.detect.outputs.commit_msg, 'TODO') && steps.create_task.outputs.task_id != 'null'
         run: |
+          # 3. Mensaje de Discord mejorado con ID, Título y Fecha
+          MESSAGE="🆕 **Nueva Tarea Azure Creada** (ID: ${{ steps.create_task.outputs.task_id }})\n"
+          MESSAGE+="**Título:** _${{ steps.create_task.outputs.task_title }}_ \n"
+          MESSAGE+="**Commit:** _${{ steps.detect.outputs.commit_msg }}_ \n"
+          MESSAGE+="**Fecha Commit:** `${{ steps.detect.outputs.commit_date }}`"
+          
           curl -H "Content-Type: application/json" \
             -X POST \
-            -d "{\"content\": \"🆕 Nueva tarea creada en Azure por commit: **${{ steps.detect.outputs.commit_msg }}**\"}" \
+            -d "{\"content\": \"$MESSAGE\"}" \
             ${{ secrets.DISCORD_WEBHOOK }}
 
       # ✅ Mover una tarea a "Done" si el commit contiene "DONE"
+      # (Este bloque no necesita cambios, funciona correctamente)
       - name: Move task to Done if commit contains 'DONE'
         if: contains(steps.detect.outputs.commit_msg, 'DONE')
         run: |
