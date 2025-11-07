@@ -1,0 +1,55 @@
+name: Azure Task + Discord Sync
+
+on:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  create_or_update_task:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Detect commit message
+        id: detect
+        run: |
+          echo "commit_msg=$(git log -1 --pretty=%B)" >> $GITHUB_OUTPUT
+
+      - name: Create task in Azure if commit contains 'TODO'
+        if: contains(steps.detect.outputs.commit_msg, 'TODO')
+        run: |
+          curl -X POST \
+          -H "Content-Type: application/json" \
+          -H "Authorization: Basic $(echo -n ":${{ secrets.AZURE_TOKEN }}" | base64)" \
+          -d '{"fields": {"System.Title": "Tarea creada desde commit: '"${{ github.event.head_commit.message }}"'", "System.State": "To Do"}}' \
+          "https://dev.azure.com/${{ secrets.AZURE_ORG}}/${{ secrets.AZURE_PROJECT}}/_apis/wit/workitems/$task?api-version=7.0"
+
+      - name: Send Discord message on task creation
+        if: contains(steps.detect.outputs.commit_msg, 'TODO')
+        run: |
+          curl -H "Content-Type: application/json" \
+          -X POST \
+          -d '{"content": "🆕 Nueva tarea creada en Azure por commit: **${{ github.event.head_commit.message }}**"}' \
+          ${{ secrets.DISCORD_WEBHOOK }}
+
+      - name: Move task to Done if commit contains 'DONE'
+        if: contains(steps.detect.outputs.commit_msg, 'DONE')
+        run: |
+          # Aquí deberías obtener el ID de la task (puede guardarse en la descripción o en un archivo .json)
+          TASK_ID=$(curl -s -u :${{ secrets.AZURE_TOKEN }} "https://dev.azure.com/${{ secrets.AZURE_ORG}}/${{ secrets.AZURE_PROJECT}}/_apis/wit/wiql?api-version=7.0" \
+            -d '{"query": "Select [System.Id] From WorkItems Where [System.Title] Contains ''${{ github.event.head_commit.message }}''"}' | jq -r '.workItems[0].id')
+          
+          curl -X PATCH \
+          -H "Content-Type: application/json-patch+json" \
+          -H "Authorization: Basic $(echo -n ":${{ secrets.AZURE_TOKEN }}" | base64)" \
+          -d '[{"op": "add", "path": "/fields/System.State", "value": "Done"}]' \
+          "https://dev.azure.com/${{ secrets.AZURE_ORG}}/${{ secrets.AZURE_PROJECT}}/_apis/wit/workitems/$TASK_ID?api-version=7.0"
+
+      - name: Send Discord message on task done
+        if: contains(steps.detect.outputs.commit_msg, 'DONE')
+        run: |
+          curl -H "Content-Type: application/json" \
+          -X POST \
+          -d '{"content": "✅ Tarea marcada como completada por push: **${{ github.event.head_commit.message }}**"}' \
+          ${{ secrets.DISCORD_WEBHOOK }}
