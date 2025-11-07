@@ -33,7 +33,7 @@ jobs:
         run: |
           AUTH=$(printf ":${{ secrets.AZURE_PAT }}" | base64 | tr -d '\n')
           TaskType=Task
-          RESPONSE_WITH_CODE=$(curl -X POST \
+          HTTP_CODE=$(curl -X POST \
             -H "Content-Type: application/json-patch+json" \
             -H "Authorization: Basic $AUTH" \
             -d "[
@@ -41,15 +41,23 @@ jobs:
               {\"op\": \"add\", \"path\": \"/fields/System.State\", \"value\": \"To Do\"}
             ]" \
             -w "%{http_code}" \
-            "https://dev.azure.com/${{ secrets.AZURE_ORG}}/${{ secrets.AZURE_PROJECT}}/_apis/wit/workitems/\$${TaskType}?api-version=7.0" 2>&1) # Usamos \$ para la URL
-
-          HTTP_CODE=$(echo "$RESPONSE_WITH_CODE" | tail -n 1)
-          RESPONSE_BODY=$(echo "$RESPONSE_WITH_CODE" | sed '$ d')
+            -o /dev/null \
+            "https://dev.azure.com/${{ secrets.AZURE_ORG}}/${{ secrets.AZURE_PROJECT}}/_apis/wit/workitems/${TaskType}?api-version=7.0") # URL corregida y simplificada
           
+          RESPONSE_BODY=$(curl -X POST \
+            -s \
+            -H "Content-Type: application/json-patch+json" \
+            -H "Authorization: Basic $AUTH" \
+            -d "[
+              {\"op\": \"add\", \"path\": \"/fields/System.Title\", \"value\": \"Tarea creada desde commit: ${{ steps.detect.outputs.commit_msg }}\"},
+              {\"op\": \"add\", \"path\": \"/fields/System.State\", \"value\": \"To Do\"}
+            ]" \
+            "https://dev.azure.com/${{ secrets.AZURE_ORG}}/${{ secrets.AZURE_PROJECT}}/_apis/wit/workitems/${TaskType}?api-version=7.0")
+
           echo "Código HTTP de Azure: $HTTP_CODE"
-          echo "Respuesta de Azure: $RESPONSE_BODY"
           
           if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+              # Tarea creada con éxito
               TASK_ID=$(echo "$RESPONSE_BODY" | jq -r '.id')
               TASK_TITLE=$(echo "$RESPONSE_BODY" | jq -r '.fields."System.Title"')
               
