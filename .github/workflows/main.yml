@@ -32,13 +32,11 @@ jobs:
         id: create_task
         if: contains(steps.detect.outputs.commit_msg, 'TODO')
         run: |
-          # 1. SOLUCIÓN ALTERNATIVA DE AUTENTICACIÓN: 
-          # Se codifica SOLO el PAT. Azure DevOps a menudo permite esto para Basic Auth
-          # cuando la codificación de ':PAT' falla debido a errores de seguridad de path.
+          # SOLUCIÓN ALTERNATIVA DE AUTENTICACIÓN
           AUTH=$(echo -n "${{ secrets.AZURE_PAT }}" | base64)
           TaskType=Task
           
-          # 2. Llamada a la API: Una sola llamada para obtener la respuesta completa
+          # Llamada a la API (solo 1)
           RESPONSE_AND_CODE=$(curl -s -X POST \
             -H "Content-Type: application/json-patch+json" \
             -H "Authorization: Basic $AUTH" \
@@ -49,16 +47,14 @@ jobs:
             -w "%{http_code}" \
             "https://dev.azure.com/${{ secrets.AZURE_ORG}}/${{ secrets.AZURE_PROJECT}}/_apis/wit/workitems/${TaskType}?api-version=7.0")
 
-          # 3. Separar el código HTTP (últimos 3 dígitos) del cuerpo de la respuesta
+          # Separar el código HTTP del cuerpo de la respuesta
           HTTP_CODE=${RESPONSE_AND_CODE:(-3)}
           RESPONSE_BODY=${RESPONSE_AND_CODE:0:${#RESPONSE_AND_CODE}-3}
           
           echo "Código HTTP de Azure: $HTTP_CODE"
           echo "Respuesta de Azure: $RESPONSE_BODY"
           
-          # 4. Evaluación del resultado
           if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
-              # Tarea creada con éxito
               TASK_ID=$(echo "$RESPONSE_BODY" | jq -r '.id')
               TASK_TITLE=$(echo "$RESPONSE_BODY" | jq -r '.fields."System.Title"')
               
@@ -71,15 +67,13 @@ jobs:
               echo "task_title=$TASK_TITLE" >> $GITHUB_OUTPUT
               echo "Tarea Azure ID: $TASK_ID creada con éxito."
           else
-              # Fallo en la creación
               echo "::error title=Fallo en Azure API::La creación de la tarea falló con código HTTP $HTTP_CODE. Respuesta: $RESPONSE_BODY"
               echo "task_id=null" >> $GITHUB_OUTPUT
               echo "task_title=Fallo en la creación" >> $GITHUB_OUTPUT
-              exit 1 # Forzar la falla del paso si la creación falló
+              exit 1 
           fi
 
       - name: Send Discord message on task creation
-        # Solo se ejecuta si la tarea se creó con éxito (task_id no es 'null')
         if: contains(steps.detect.outputs.commit_msg, 'TODO') && steps.create_task.outputs.task_id != 'null'
         run: |
           MESSAGE="🆕 **Nueva Tarea Azure Creada** (ID: ${{ steps.create_task.outputs.task_id }})\n"
@@ -92,15 +86,13 @@ jobs:
             -d "{\"content\": \"$MESSAGE\"}" \
             ${{ secrets.DISCORD_WEBHOOK }}
 
-      ---
       # ✅ Mover una tarea a "Done" si el commit contiene "DONE"
       - name: Move task to Done if commit contains 'DONE'
         if: contains(steps.detect.outputs.commit_msg, 'DONE')
         run: |
-          # Aquí volvemos a usar la sintaxis estándar de AUTH porque esta query no falla tanto
+          # Volvemos a la autenticación estándar aquí, es más estable para queries.
           AUTH=$(printf ":${{ secrets.AZURE_PAT }}" | base64 | tr -d '\n')
           
-          # Primero, buscamos la tarea por su título (usando el mensaje del commit)
           TASK_ID=$(curl -s -X POST \
             -H "Content-Type: application/json" \
             -H "Authorization: Basic $AUTH" \
@@ -108,7 +100,6 @@ jobs:
             "https://dev.azure.com/${{ secrets.AZURE_ORG}}/${{ secrets.AZURE_PROJECT}}/_apis/wit/wiql?api-version=7.0" | jq -r '.workItems[0].id')
 
           if [ "$TASK_ID" != "null" ] && [ -n "$TASK_ID" ]; then
-            # Segundo, actualizamos el estado
             curl -X PATCH \
               -H "Content-Type: application/json-patch+json" \
               -H "Authorization: Basic $AUTH" \
