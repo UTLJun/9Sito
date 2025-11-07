@@ -26,6 +26,7 @@ jobs:
         if: contains(steps.detect.outputs.commit_msg, 'TODO')
         run: |
           AUTH=$(printf ":${{ secrets.AZURE_PAT }}" | base64 | tr -d '\n')
+          Task=Task
           curl -X PATCH \
             -H "Content-Type: application/json-patch+json" \
             -H "Authorization: Basic $AUTH" \
@@ -33,7 +34,8 @@ jobs:
               {\"op\": \"add\", \"path\": \"/fields/System.Title\", \"value\": \"Tarea creada desde commit: ${{ steps.detect.outputs.commit_msg }}\"},
               {\"op\": \"add\", \"path\": \"/fields/System.State\", \"value\": \"To Do\"}
             ]" \
-            "https://dev.azure.com/${{ secrets.AZURE_ORG}}/${{ secrets.AZURE_PROJECT}}/_apis/wit/workitems/\$Task?api-version=7.0"
+              "https://dev.azure.com/${{ secrets.AZURE_ORG}}/${{ secrets.AZURE_PROJECT}}/_apis/wit/workitems/$Task?api-version=7.0"
+
 
       - name: Send Discord message on task creation
         if: contains(steps.detect.outputs.commit_msg, 'TODO')
