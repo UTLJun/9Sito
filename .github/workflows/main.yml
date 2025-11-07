@@ -7,55 +7,67 @@ on:
       - master
 
 jobs:
-  create_or_update_task:
+  azure_discord_sync:
     runs-on: ubuntu-latest
 
-    steps:  
+    steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        
+
       - name: Detect commit message
         id: detect
         run: |
-          echo "commit_msg=$(git log -1 --pretty=%B)" >> $GITHUB_OUTPUT
+          COMMIT_MSG=$(git log -1 --pretty=%B)
+          echo "commit_msg=$COMMIT_MSG" >> $GITHUB_OUTPUT
+          echo "Commit detectado: $COMMIT_MSG"
 
+      # 🆕 Crear una tarea en Azure si el commit contiene "TODO"
       - name: Create task in Azure if commit contains 'TODO'
         if: contains(steps.detect.outputs.commit_msg, 'TODO')
         run: |
-          curl -X POST \
-          -H "Content-Type: application/json-patch+json" \
-          -H "Authorization: Basic $(echo -n ":${{ secrets.AZURE_TOKEN }}" | base64)" \
-          -d '[
-            {"op": "add", "path": "/fields/System.Title", "value": "Tarea creada desde commit: '"${{ github.event.head_commit.message }}"'"},
-            {"op": "add", "path": "/fields/System.State", "value": "To Do"}
-          ]' \
-          "https://dev.azure.com/${{ secrets.AZURE_ORG}}/${{ secrets.AZURE_PROJECT}}/_apis/wit/workitems/\$Task?api-version=7.0"
+          AUTH=$(printf ":${{ secrets.AZURE_PAT }}" | base64 | tr -d '\n')
+          curl -X PATCH \
+            -H "Content-Type: application/json-patch+json" \
+            -H "Authorization: Basic $AUTH" \
+            -d "[
+              {\"op\": \"add\", \"path\": \"/fields/System.Title\", \"value\": \"Tarea creada desde commit: ${{ steps.detect.outputs.commit_msg }}\"},
+              {\"op\": \"add\", \"path\": \"/fields/System.State\", \"value\": \"To Do\"}
+            ]" \
+            "https://dev.azure.com/${{ secrets.AZURE_ORG}}/${{ secrets.AZURE_PROJECT}}/_apis/wit/workitems/\$Task?api-version=7.0"
 
       - name: Send Discord message on task creation
         if: contains(steps.detect.outputs.commit_msg, 'TODO')
         run: |
           curl -H "Content-Type: application/json" \
-          -X POST \
-          -d '{"content": "🆕 Nueva tarea creada en Azure por commit: **${{ github.event.head_commit.message }}**"}' \
-          ${{ secrets.DISCORD_WEBHOOK }}
+            -X POST \
+            -d "{\"content\": \"🆕 Nueva tarea creada en Azure por commit: **${{ steps.detect.outputs.commit_msg }}**\"}" \
+            ${{ secrets.DISCORD_WEBHOOK }}
 
+      # ✅ Mover una tarea a "Done" si el commit contiene "DONE"
       - name: Move task to Done if commit contains 'DONE'
         if: contains(steps.detect.outputs.commit_msg, 'DONE')
         run: |
-          # Aquí deberías obtener el ID de la task (puede guardarse en la descripción o en un archivo .json)
-          TASK_ID=$(curl -s -u :${{ secrets.AZURE_TOKEN }} "https://dev.azure.com/${{ secrets.AZURE_ORG}}/${{ secrets.AZURE_PROJECT}}/_apis/wit/wiql?api-version=7.0" \
-            -d '{"query": "Select [System.Id] From WorkItems Where [System.Title] Contains ''${{ github.event.head_commit.message }}''"}' | jq -r '.workItems[0].id')
-          
-          curl -X PATCH \
-          -H "Content-Type: application/json-patch+json" \
-          -H "Authorization: Basic $(echo -n ":${{ secrets.AZURE_TOKEN }}" | base64)" \
-          -d '[{"op": "add", "path": "/fields/System.State", "value": "Done"}]' \
-          "https://dev.azure.com/${{ secrets.AZURE_ORG}}/${{ secrets.AZURE_PROJECT}}/_apis/wit/workitems/$TASK_ID?api-version=7.0"
+          AUTH=$(printf ":${{ secrets.AZURE_PAT }}" | base64 | tr -d '\n')
+          TASK_ID=$(curl -s -X POST \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Basic $AUTH" \
+            -d "{\"query\": \"Select [System.Id] From WorkItems Where [System.Title] Contains '${{ steps.detect.outputs.commit_msg }}'\"}" \
+            "https://dev.azure.com/${{ secrets.AZURE_ORG}}/${{ secrets.AZURE_PROJECT}}/_apis/wit/wiql?api-version=7.0" | jq -r '.workItems[0].id')
+
+          if [ "$TASK_ID" != "null" ] && [ -n "$TASK_ID" ]; then
+            curl -X PATCH \
+              -H "Content-Type: application/json-patch+json" \
+              -H "Authorization: Basic $AUTH" \
+              -d '[{"op": "add", "path": "/fields/System.State", "value": "Done"}]' \
+              "https://dev.azure.com/${{ secrets.AZURE_ORG}}/${{ secrets.AZURE_PROJECT}}/_apis/wit/workitems/$TASK_ID?api-version=7.0"
+          else
+            echo "⚠️ No se encontró ninguna tarea para actualizar."
+          fi
 
       - name: Send Discord message on task done
         if: contains(steps.detect.outputs.commit_msg, 'DONE')
         run: |
           curl -H "Content-Type: application/json" \
-          -X POST \
-          -d '{"content": "✅ Tarea marcada como completada por push: **${{ github.event.head_commit.message }}**"}' \
-          ${{ secrets.DISCORD_WEBHOOK }}
+            -X POST \
+            -d "{\"content\": \"✅ Tarea marcada como completada por push: **${{ steps.detect.outputs.commit_msg }}**\"}" \
+            ${{ secrets.DISCORD_WEBHOOK }}
