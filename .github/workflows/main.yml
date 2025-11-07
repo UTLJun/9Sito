@@ -29,7 +29,7 @@ jobs:
             {"op": "add", "path": "/fields/System.Title", "value": "Tarea creada desde commit: '"${{ github.event.head_commit.message }}"'"},
             {"op": "add", "path": "/fields/System.State", "value": "To Do"}
           ]' \
-          "https://dev.azure.com/${{ secrets.AZURE_ORG}}/${{ secrets.AZURE_PROJECT}}/_apis/wit/workitems/$Task?api-version=7.0"
+          "https://dev.azure.com/${{ secrets.AZURE_ORG}}/${{ secrets.AZURE_PROJECT}}/_apis/wit/workitems/\$Task?api-version=7.0"
 
       - name: Send Discord message on task creation
         if: contains(steps.detect.outputs.commit_msg, 'TODO')
