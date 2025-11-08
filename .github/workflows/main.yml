@@ -1,0 +1,118 @@
+name: Azure Task + Discord Sync
+
+on:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  azure_discord_sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install JQ (JSON Processor)
+        run: sudo apt-get install jq
+
+      - name: Detect commit message
+        id: detect
+        run: |
+          # Captura del mensaje y fecha del commit
+          COMMIT_MSG=$(git log -1 --pretty=%B)
+          COMMIT_DATE=$(git log -1 --pretty=format:'%as')
+          echo "commit_msg=$COMMIT_MSG" >> $GITHUB_OUTPUT
+          echo "commit_date=$COMMIT_DATE" >> $GITHUB_OUTPUT
+          echo "Commit detectado: $COMMIT_MSG (Fecha: $COMMIT_DATE)"
+
+      # 🆕 Crear una tarea en Azure si el commit contiene "TODO"
+      - name: Create task in Azure if commit contains 'TODO'
+        id: create_task
+        if: contains(steps.detect.outputs.commit_msg, 'TODO')
+        run: |
+          # SOLUCIÓN ALTERNATIVA DE AUTENTICACIÓN
+          AUTH=$(echo -n "${{ secrets.AZURE_PAT }}" | base64)
+          TaskType=Task
+          
+          # Llamada a la API (solo 1)
+          RESPONSE_AND_CODE=$(curl -s -X POST \
+            -H "Content-Type: application/json-patch+json" \
+            -H "Authorization: Basic $AUTH" \
+            -d "[
+              {\"op\": \"add\", \"path\": \"/fields/System.Title\", \"value\": \"Tarea creada desde commit: ${{ steps.detect.outputs.commit_msg }}\"},
+              {\"op\": \"add\", \"path\": \"/fields/System.State\", \"value\": \"To Do\"}
+            ]" \
+            -w "%{http_code}" \
+            "https://dev.azure.com/${{ secrets.AZURE_ORG}}/${{ secrets.AZURE_PROJECT}}/_apis/wit/workitems/${TaskType}?api-version=7.0")
+
+          # Separar el código HTTP del cuerpo de la respuesta
+          HTTP_CODE=${RESPONSE_AND_CODE:(-3)}
+          RESPONSE_BODY=${RESPONSE_AND_CODE:0:${#RESPONSE_AND_CODE}-3}
+          
+          echo "Código HTTP de Azure: $HTTP_CODE"
+          echo "Respuesta de Azure: $RESPONSE_BODY"
+          
+          if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+              TASK_ID=$(echo "$RESPONSE_BODY" | jq -r '.id')
+              TASK_TITLE=$(echo "$RESPONSE_BODY" | jq -r '.fields."System.Title"')
+              
+              if [ "$TASK_ID" == "null" ]; then
+                echo "::error title=JSON Inesperado::La API devolvió éxito, pero el ID de la tarea es nulo."
+                exit 1
+              fi
+
+              echo "task_id=$TASK_ID" >> $GITHUB_OUTPUT
+              echo "task_title=$TASK_TITLE" >> $GITHUB_OUTPUT
+              echo "Tarea Azure ID: $TASK_ID creada con éxito."
+          else
+              echo "::error title=Fallo en Azure API::La creación de la tarea falló con código HTTP $HTTP_CODE. Respuesta: $RESPONSE_BODY"
+              echo "task_id=null" >> $GITHUB_OUTPUT
+              echo "task_title=Fallo en la creación" >> $GITHUB_OUTPUT
+              exit 1 
+          fi
+
+      - name: Send Discord message on task creation
+        if: contains(steps.detect.outputs.commit_msg, 'TODO') && steps.create_task.outputs.task_id != 'null'
+        run: |
+          MESSAGE="🆕 **Nueva Tarea Azure Creada** (ID: ${{ steps.create_task.outputs.task_id }})\n"
+          MESSAGE+="**Título:** _${{ steps.create_task.outputs.task_title }}_ \n"
+          MESSAGE+="**Commit:** _${{ steps.detect.outputs.commit_msg }}_ \n"
+          MESSAGE+="**Fecha Commit:** `${{ steps.detect.outputs.commit_date }}`"
+          
+          curl -H "Content-Type: application/json" \
+            -X POST \
+            -d "{\"content\": \"$MESSAGE\"}" \
+            ${{ secrets.DISCORD_WEBHOOK }}
+
+      # ✅ Mover una tarea a "Done" si el commit contiene "DONE"
+      - name: Move task to Done if commit contains 'DONE'
+        if: contains(steps.detect.outputs.commit_msg, 'DONE')
+        run: |
+          # Volvemos a la autenticación estándar aquí, es más estable para queries.
+          AUTH=$(printf ":${{ secrets.AZURE_PAT }}" | base64 | tr -d '\n')
+          
+          TASK_ID=$(curl -s -X POST \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Basic $AUTH" \
+            -d "{\"query\": \"Select [System.Id] From WorkItems Where [System.Title] Contains '${{ steps.detect.outputs.commit_msg }}'\"}" \
+            "https://dev.azure.com/${{ secrets.AZURE_ORG}}/${{ secrets.AZURE_PROJECT}}/_apis/wit/wiql?api-version=7.0" | jq -r '.workItems[0].id')
+
+          if [ "$TASK_ID" != "null" ] && [ -n "$TASK_ID" ]; then
+            curl -X PATCH \
+              -H "Content-Type: application/json-patch+json" \
+              -H "Authorization: Basic $AUTH" \
+              -d '[{"op": "add", "path": "/fields/System.State", "value": "Done"}]' \
+              "https://dev.azure.com/${{ secrets.AZURE_ORG}}/${{ secrets.AZURE_PROJECT}}/_apis/wit/workitems/$TASK_ID?api-version=7.0"
+          else
+            echo "⚠️ No se encontró ninguna tarea para actualizar."
+          fi
+
+      - name: Send Discord message on task done
+        if: contains(steps.detect.outputs.commit_msg, 'DONE')
+        run: |
+          curl -H "Content-Type: application/json" \
+            -X POST \
+            -d "{\"content\": \"✅ Tarea marcada como completada por push: **${{ steps.detect.outputs.commit_msg }}**\"}" \
+            ${{ secrets.DISCORD_WEBHOOK }}
